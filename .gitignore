@@ -1,0 +1,39 @@
+# Credenciales y configuración privada
+.env
+.env.*
+!.env.example
+.secrets
+.secrets/
+secrets/
+*.key
+*.pem
+
+# Entorno Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pruebas y análisis
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Registros y archivos temporales
+*.log
+logs/
+tmp/
+*.tmp
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
