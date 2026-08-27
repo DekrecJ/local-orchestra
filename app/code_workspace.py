@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -60,6 +61,102 @@ test_model = base_model.with_structured_output(
     method="json_schema",
 )
 
+
+class StructuredGenerationError(RuntimeError):
+    def __init__(
+        self,
+        label: str,
+        errors: list[dict[str, object]],
+    ) -> None:
+        self.label = label
+        self.errors = errors
+        super().__init__(
+            f"{label} falló después de {len(errors)} intentos: "
+            f"{errors[-1]['error']}"
+        )
+
+
+def generation_failure(
+    error: StructuredGenerationError,
+    *,
+    stage: str,
+    owner: str,
+) -> dict[str, object]:
+    error_types = {
+        str(attempt["error_type"])
+        for attempt in error.errors
+    }
+    categories = {
+        str(attempt["failure_category"])
+        for attempt in error.errors
+    }
+    failure_category = (
+        "model"
+        if categories == {"model"}
+        else "infrastructure"
+    )
+    failure_type = (
+        "model_output_validation"
+        if error_types == {"validation"}
+        else "model_invocation"
+    )
+
+    return {
+        "status": "failed",
+        "passed": False,
+        "failure_stage": stage,
+        "failure_owner": (
+            owner
+            if failure_category == "model"
+            else "infrastructure"
+        ),
+        "responsible_agent": owner,
+        "failure_category": failure_category,
+        "failure_type": failure_type,
+        "attempts": len(error.errors),
+        "attempt_errors": error.errors,
+        "error": str(error),
+    }
+
+
+def retry_feedback_message(
+    *,
+    label: str,
+    attempt: int,
+    error: Exception,
+) -> HumanMessage:
+    return HumanMessage(
+        content=(
+            f"Tu salida anterior del intento {attempt} no superó la "
+            f"validación de {label}. Error exacto:\n{error}\n\n"
+            "Genera una salida nueva y completa desde cero. Corrige "
+            "específicamente ese error; no repitas la salida anterior. "
+            "Respeta el mismo esquema estructurado y todas las "
+            "restricciones originales."
+        )
+    )
+
+
+def generation_error_category(
+    error: Exception,
+    *,
+    invocation_completed: bool,
+) -> str:
+    if invocation_completed:
+        return "model"
+
+    error_name = type(error).__name__.lower()
+    error_module = type(error).__module__.lower()
+
+    if any(
+        marker in error_name or marker in error_module
+        for marker in ("parser", "validation", "pydantic")
+    ):
+        return "model"
+
+    return "infrastructure"
+
+
 async def invoke_structured_with_retries(
     model,
     messages,
@@ -68,12 +165,18 @@ async def invoke_structured_with_retries(
     schema: type[BaseModel],
     tests: bool,
     attempts: int = 3,
+    retry_delay_seconds: float = 2,
 ):
-    last_error: Exception | None = None
+    attempt_errors: list[dict[str, object]] = []
+    retry_messages = list(messages)
 
     for attempt in range(1, attempts + 1):
+        invocation_completed = False
+        result = None
+
         try:
-            result = await model.ainvoke(messages)
+            result = await model.ainvoke(retry_messages)
+            invocation_completed = True
             validated = schema.model_validate(result)
 
             validate_files(
@@ -84,17 +187,55 @@ async def invoke_structured_with_retries(
             return validated
 
         except Exception as error:
-            last_error = error
+            error_type = (
+                "validation"
+                if invocation_completed
+                else "invocation"
+            )
+            fingerprint = None
+
+            if invocation_completed:
+                representation = repr(result).encode(
+                    "utf-8",
+                    errors="replace",
+                )
+                fingerprint = hashlib.sha256(
+                    representation
+                ).hexdigest()
+
+            attempt_errors.append(
+                {
+                    "attempt": attempt,
+                    "error_type": error_type,
+                    "failure_category": generation_error_category(
+                        error,
+                        invocation_completed=invocation_completed,
+                    ),
+                    "error": str(error),
+                    "output_fingerprint": fingerprint,
+                }
+            )
 
             if attempt >= attempts:
                 break
 
-            await asyncio.sleep(attempt * 2)
+            retry_messages.append(
+                retry_feedback_message(
+                    label=label,
+                    attempt=attempt,
+                    error=error,
+                )
+            )
 
-    raise RuntimeError(
-        f"{label} falló después de {attempts} intentos: "
-        f"{last_error}"
-    ) from last_error
+            if retry_delay_seconds > 0:
+                await asyncio.sleep(
+                    attempt * retry_delay_seconds
+                )
+
+    raise StructuredGenerationError(
+        label,
+        attempt_errors,
+    )
 
 def validate_files(
     files: list[GeneratedFile],
@@ -202,8 +343,9 @@ async def create_python_workspace(
     if len(task) > MAX_TASK_CHARACTERS:
         raise ValueError("La tarea es demasiado extensa.")
 
-    source_bundle = await invoke_structured_with_retries(
-    source_model,
+    try:
+        source_bundle = await invoke_structured_with_retries(
+            source_model,
         [
             SystemMessage(
                 content=(
@@ -218,10 +360,16 @@ async def create_python_workspace(
             ),
                     HumanMessage(content=task),
     ],
-    label="El programador",
-    schema=SourceBundle,
-    tests=False,
-)
+            label="El programador",
+            schema=SourceBundle,
+            tests=False,
+        )
+    except StructuredGenerationError as error:
+        return generation_failure(
+            error,
+            stage="source_generation",
+            owner="programmer",
+        )
 
     source_description = "\n\n".join(
         (
@@ -231,8 +379,9 @@ async def create_python_workspace(
         for generated_file in source_bundle.files
     )
 
-    test_bundle = await invoke_structured_with_retries(
-    test_model,
+    try:
+        test_bundle = await invoke_structured_with_retries(
+            test_model,
         [
             SystemMessage(
                 content=(
@@ -253,10 +402,16 @@ async def create_python_workspace(
                 )
             ),
        ],
-    label="El diseñador de pruebas",
-    schema=TestBundle,
-    tests=True,
-)
+            label="El diseñador de pruebas",
+            schema=TestBundle,
+            tests=True,
+        )
+    except StructuredGenerationError as error:
+        return generation_failure(
+            error,
+            stage="test_generation",
+            owner="test_designer",
+        )
 
     source_names = {
         generated_file.path
@@ -290,10 +445,10 @@ async def create_python_workspace(
         )
 
     return {
+        "status": "generated",
         "job_id": job_id,
         "source_summary": source_bundle.summary,
         "test_summary": test_bundle.summary,
         "source_files": sorted(source_names),
         "test_files": sorted(test_names),
     }
-

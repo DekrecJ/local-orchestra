@@ -14,6 +14,8 @@ from app.code_workspace import (
     MAX_TASK_CHARACTERS,
     WORKSPACE_ROOT,
     GeneratedFile,
+    StructuredGenerationError,
+    generation_failure,
     invoke_structured_with_retries,
     SourceBundle,
     source_model,
@@ -177,8 +179,9 @@ async def revise_python_workspace(
 
     limited_output = test_output[-MAX_FEEDBACK_CHARACTERS:]
 
-    revision = await invoke_structured_with_retries(
-    source_model,
+    try:
+        revision = await invoke_structured_with_retries(
+            source_model,
         [
             SystemMessage(
                 content=(
@@ -202,10 +205,20 @@ async def revise_python_workspace(
                 )
             ),
          ],
-         label="El corrector",
-        schema=SourceBundle,
-        tests=False,
-)
+            label="El corrector",
+            schema=SourceBundle,
+            tests=False,
+        )
+    except StructuredGenerationError as error:
+        return {
+            "job_id": job_id,
+            "attempt": attempt,
+            **generation_failure(
+                error,
+                stage="source_correction",
+                owner="programmer",
+            ),
+        }
 
 
     replace_source_files(
