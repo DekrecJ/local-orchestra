@@ -24,7 +24,7 @@ formato. Todos los contenidos, listados, búsquedas y reportes están acotados.
 
 ```text
 ORCHESTRA_OBSIDIAN_ENABLED=false
-ORCHESTRA_OBSIDIAN_VAULT_PATH=/home/derex/Capsulas/Obsidian/Orchestra-Vault
+ORCHESTRA_OBSIDIAN_VAULT_PATH=/home/USUARIO/Orchestra-Vault
 ORCHESTRA_OBSIDIAN_MAX_NOTE_BYTES=262144
 ORCHESTRA_OBSIDIAN_MAX_REPORT_BYTES=262144
 ORCHESTRA_OBSIDIAN_MAX_SEARCH_NOTES=500

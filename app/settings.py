@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     sandbox_outer_timeout_seconds: int = Field(default=45, ge=5, le=300)
     sandbox_max_output_bytes: int = Field(default=128 * 1024, ge=4096, le=1024 * 1024)
     obsidian_enabled: bool = False
-    obsidian_vault_path: Path = Path("/home/derex/Capsulas/Obsidian/Orchestra-Vault")
+    obsidian_vault_path: Path = Path("/home/USUARIO/Orchestra-Vault")
     obsidian_max_note_bytes: int = Field(default=256 * 1024, ge=1024, le=1024 * 1024)
     obsidian_max_report_bytes: int = Field(default=256 * 1024, ge=4096, le=1024 * 1024)
     obsidian_max_search_notes: int = Field(default=500, ge=1, le=5000)

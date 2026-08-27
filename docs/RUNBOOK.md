@@ -49,7 +49,7 @@ a `.env`:
 
 ```text
 ORCHESTRA_OBSIDIAN_ENABLED=true
-ORCHESTRA_OBSIDIAN_VAULT_PATH=/home/derex/Capsulas/Obsidian/Orchestra-Vault
+ORCHESTRA_OBSIDIAN_VAULT_PATH=/home/USUARIO/Orchestra-Vault
 ```
 
 Reiniciar únicamente API/worker mediante los scripts y consultar

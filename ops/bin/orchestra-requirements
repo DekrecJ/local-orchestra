@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+readonly APP_DIR=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+readonly WORKSPACE_DIR="/srv/local-orchestra/workspaces"
+readonly SANDBOX_LAUNCHER="/usr/local/sbin/orchestra-python-test"
+readonly SUPPORTED_UBUNTU="26.04"
+
+failures=0
+warnings=0
+
+usage() {
+    cat <<'EOF'
+Uso: ops/bin/orchestra-requirements --check
+       ops/bin/orchestra-requirements --help
+
+Comprueba sin modificar el sistema los requisitos de Local Orchestra.
+No lee .env ni secretos, no usa red externa, no instala paquetes y no ejecuta
+código generado. Devuelve 0 si los requisitos obligatorios están disponibles.
+
+Acciones que pueden requerir sudo durante una instalación nueva, pero que este
+script nunca ejecuta:
+  - instalar paquetes del sistema y Docker;
+  - crear /srv/local-orchestra/workspaces;
+  - instalar el launcher restringido en /usr/local/sbin;
+  - gestionar el grupo docker o servicios del sistema;
+  - instalar unidades systemd opcionales.
+EOF
+}
+
+ok() {
+    printf 'OK       %s\n' "$1"
+}
+
+warn() {
+    printf 'AVISO    %s\n' "$1"
+    warnings=$((warnings + 1))
+}
+
+fail() {
+    printf 'FALTA    %s\n' "$1"
+    failures=$((failures + 1))
+}
+
+require_command() {
+    local command_name="$1"
+    if command -v -- "$command_name" >/dev/null 2>&1; then
+        ok "comando $command_name"
+    else
+        fail "comando $command_name"
+    fi
+}
+
+check_tcp() {
+    local label="$1"
+    local host="$2"
+    local port="$3"
+    if timeout 2 bash -c 'exec 3<>/dev/tcp/$1/$2' _ "$host" "$port" 2>/dev/null; then
+        ok "$label responde en $host:$port"
+    else
+        fail "$label no responde en $host:$port"
+    fi
+}
+
+if [[ $# -ne 1 ]]; then
+    usage >&2
+    exit 64
+fi
+
+case "$1" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --check)
+        ;;
+    *)
+        usage >&2
+        exit 64
+        ;;
+esac
+
+printf 'Local Orchestra: comprobación sin cambios\n'
+printf 'Repositorio: %s\n' "$APP_DIR"
+printf 'No se leerán .env ni archivos de secretos.\n\n'
+
+if [[ -r /etc/os-release ]]; then
+    # /etc/os-release es configuración pública del sistema, no configuración de la aplicación.
+    . /etc/os-release
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "$SUPPORTED_UBUNTU" ]]; then
+        ok "Ubuntu $SUPPORTED_UBUNTU LTS"
+    else
+        fail "se requiere Ubuntu $SUPPORTED_UBUNTU LTS; detectado ${ID:-desconocido} ${VERSION_ID:-desconocido}"
+    fi
+else
+    fail "no se pudo identificar Ubuntu mediante /etc/os-release"
+fi
+
+for command_name in bash git python3 openssl curl docker timeout realpath find stat; do
+    require_command "$command_name"
+done
+
+if python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    ok "Python $(python3 -c 'import platform; print(platform.python_version())') (mínimo 3.10)"
+else
+    fail "Python debe ser 3.10 o posterior"
+fi
+
+for required_file in requirements.lock .env.example ops/sandbox/orchestra-python-test deploy/compose/compose.yaml; do
+    if [[ -f "$APP_DIR/$required_file" && ! -L "$APP_DIR/$required_file" ]]; then
+        ok "archivo $required_file"
+    else
+        fail "archivo regular $required_file"
+    fi
+done
+
+if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+    ok "entorno virtual .venv"
+else
+    fail "entorno virtual .venv; créelo con python3 -m venv .venv"
+fi
+
+if [[ -f "$APP_DIR/.env" && ! -L "$APP_DIR/.env" ]]; then
+    ok ".env presente (contenido no inspeccionado)"
+else
+    fail ".env ausente; créelo localmente desde .env.example"
+fi
+
+for secret_name in postgres_password api_token; do
+    secret_path="$APP_DIR/.secrets/$secret_name"
+    if [[ -f "$secret_path" && ! -L "$secret_path" ]]; then
+        mode=$(stat -c '%a' -- "$secret_path")
+        if [[ "$mode" == "600" ]]; then
+            ok ".secrets/$secret_name existe con modo 600 (contenido no leído)"
+        else
+            fail ".secrets/$secret_name debe tener modo 600; detectado $mode"
+        fi
+    else
+        fail ".secrets/$secret_name no existe como archivo regular"
+    fi
+done
+
+if systemctl is-active --quiet docker 2>/dev/null; then
+    ok "servicio Docker activo"
+else
+    fail "servicio Docker inactivo o no gestionado por systemd"
+fi
+
+if docker info >/dev/null 2>&1; then
+    ok "usuario actual autorizado para administrar Docker"
+    if docker image inspect python:3.13-slim >/dev/null 2>&1; then
+        ok "imagen local python:3.13-slim"
+    else
+        fail "imagen local python:3.13-slim; descárguela explícitamente antes de probar jobs"
+    fi
+else
+    warn "usuario sin acceso directo a Docker; puede ser válido si usa el launcher restringido"
+fi
+
+if [[ -d "$WORKSPACE_DIR" && ! -L "$WORKSPACE_DIR" ]]; then
+    ok "workspace canónico $WORKSPACE_DIR"
+else
+    fail "workspace canónico $WORKSPACE_DIR"
+fi
+
+if [[ -x "$SANDBOX_LAUNCHER" && ! -L "$SANDBOX_LAUNCHER" ]]; then
+    if cmp -s -- "$APP_DIR/ops/sandbox/orchestra-python-test" "$SANDBOX_LAUNCHER"; then
+        ok "launcher instalado coincide con la versión del repositorio"
+    else
+        fail "launcher instalado no coincide con ops/sandbox/orchestra-python-test"
+    fi
+else
+    fail "launcher restringido $SANDBOX_LAUNCHER"
+fi
+
+check_tcp PostgreSQL 127.0.0.1 5432
+check_tcp Temporal 127.0.0.1 7233
+check_tcp Ollama 127.0.0.1 11434
+
+if command -v ollama >/dev/null 2>&1; then
+    if ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq 'qwen3.5:4b'; then
+        ok "modelo Ollama qwen3.5:4b"
+    else
+        fail "modelo Ollama qwen3.5:4b"
+    fi
+    if ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq 'qwen3-embedding:0.6b'; then
+        ok "modelo Ollama qwen3-embedding:0.6b"
+    else
+        fail "modelo Ollama qwen3-embedding:0.6b"
+    fi
+else
+    fail "comando ollama"
+fi
+
+printf '\nResumen: fallos=%d avisos=%d\n' "$failures" "$warnings"
+if (( failures > 0 )); then
+    printf 'Consulte docs/INSTALLATION.md y docs/TROUBLESHOOTING.md.\n'
+    exit 1
+fi
+exit 0

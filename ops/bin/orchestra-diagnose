@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-readonly APP_DIR="/srv/local-orchestra/apps/orchestrator"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+readonly APP_DIR=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 cd "$APP_DIR"
 exec .venv/bin/python -m app.diagnostics

@@ -1,0 +1,52 @@
+name: local-orchestra
+
+services:
+  postgresql:
+    image: pgvector/pgvector:0.8.1-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: local_orchestra
+      POSTGRES_USER: orchestra_app
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/10-local-orchestra.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestra_app -d local_orchestra"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  temporal:
+    image: temporalio/temporal:1.28.1
+    restart: unless-stopped
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --db-filename
+      - /home/temporal/temporal.db
+      - --namespace
+      - local-orchestra
+    volumes:
+      - temporal_data:/home/temporal
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  postgres_password:
+    file: ../../.secrets/postgres_password
+
+volumes:
+  postgres_data:
+  temporal_data:

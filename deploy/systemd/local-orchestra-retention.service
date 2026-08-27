@@ -3,8 +3,8 @@ Description=Local Orchestra workspace retention
 
 [Service]
 Type=oneshot
-User=derex
-Group=derex
+User=orchestra
+Group=orchestra
 WorkingDirectory=/srv/local-orchestra/apps/orchestrator
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=-/srv/local-orchestra/apps/orchestrator/.env

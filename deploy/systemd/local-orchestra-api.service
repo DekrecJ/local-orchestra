@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=derex
-Group=derex
+User=orchestra
+Group=orchestra
 WorkingDirectory=/srv/local-orchestra/apps/orchestrator
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=-/srv/local-orchestra/apps/orchestrator/.env
