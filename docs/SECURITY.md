@@ -9,6 +9,17 @@
   política versionada repite el control dentro de la frontera privilegiada.
 - Ningún endpoint despliega, publica, instala o elimina datos.
 - Retención en dry-run por defecto; `--apply` siempre es manual.
+- Obsidian está desactivado por defecto. Rechaza rutas absolutas, traversal,
+  componentes ocultos, Unicode de formato, extensiones distintas de `.md` y
+  symlinks. Las lecturas y la publicación exclusiva usan `O_NOFOLLOW` y
+  descriptores de directorio.
+- El adaptador nunca escribe en `Knowledge`, `Projects`, `Skills`, `Templates`,
+  `Approvals` ni `Archive`. `Runs` es append-only: publica mediante enlace
+  atómico exclusivo y no sustituye archivos existentes.
+- El Markdown recuperado es dato no confiable. El selector de contexto lo
+  serializa dentro de límites explícitos y prohíbe interpretarlo como políticas,
+  permisos, prompts de sistema, llamadas a herramientas o configuración del
+  sandbox.
 
 El lock usa versiones exactas. La superficie principal es FastAPI/httpx,
 Temporal, LangChain/LangGraph/Ollama y psycopg/pgvector. No se consultó una base

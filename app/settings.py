@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     sandbox_launcher: Path = Path("/usr/local/sbin/orchestra-python-test")
     sandbox_outer_timeout_seconds: int = Field(default=45, ge=5, le=300)
     sandbox_max_output_bytes: int = Field(default=128 * 1024, ge=4096, le=1024 * 1024)
+    obsidian_enabled: bool = False
+    obsidian_vault_path: Path = Path("/home/derex/Capsulas/Obsidian/Orchestra-Vault")
+    obsidian_max_note_bytes: int = Field(default=256 * 1024, ge=1024, le=1024 * 1024)
+    obsidian_max_report_bytes: int = Field(default=256 * 1024, ge=4096, le=1024 * 1024)
+    obsidian_max_search_notes: int = Field(default=500, ge=1, le=5000)
+    obsidian_max_search_results: int = Field(default=20, ge=1, le=100)
+    obsidian_context_max_bytes: int = Field(default=32 * 1024, ge=1024, le=256 * 1024)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -75,6 +82,13 @@ class Settings(BaseSettings):
         if not normalized.startswith(("http://127.0.0.1:", "http://localhost:")):
             raise ValueError("Ollama debe usar una dirección HTTP local")
         return normalized
+
+    @field_validator("obsidian_vault_path")
+    @classmethod
+    def validate_obsidian_vault_path(cls, value: Path) -> Path:
+        if not value.is_absolute() or ".." in value.parts or value == Path("/"):
+            raise ValueError("La ruta del vault Obsidian debe ser absoluta, normalizada y específica")
+        return value
 
     @model_validator(mode="after")
     def validate_timeouts(self) -> "Settings":

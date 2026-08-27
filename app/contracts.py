@@ -211,3 +211,99 @@ class MemorySearchResponse(StrictModel):
     namespace: str
     items: list[dict[str, Any]]
     count: int = Field(ge=0)
+
+
+class KnowledgeSearchRequest(StrictModel):
+    query: str = Field(min_length=1, max_length=512)
+    metadata: dict[str, str] = Field(default_factory=dict)
+    folders: list[Literal["Knowledge", "Projects", "Skills"]] = Field(default_factory=list, max_length=3)
+    limit: int = Field(default=5, ge=1, le=20)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_knowledge_metadata(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 8:
+            raise ValueError("metadata admite como máximo 8 filtros")
+        if any(not key or len(key) > 64 or len(item) > 256 for key, item in value.items()):
+            raise ValueError("metadata supera los límites permitidos")
+        return value
+
+
+class KnowledgeNoteInfo(StrictModel):
+    note_id: str
+    title: str
+    folder: Literal["Knowledge", "Projects", "Skills"]
+    size_bytes: int = Field(ge=0)
+    modified_at: datetime
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class KnowledgeNoteListResponse(StrictModel):
+    items: list[KnowledgeNoteInfo]
+    count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
+class KnowledgeSearchItem(KnowledgeNoteInfo):
+    snippet: str = Field(max_length=2000)
+    score: int = Field(ge=0)
+
+
+class KnowledgeSearchResponse(StrictModel):
+    items: list[KnowledgeSearchItem]
+    count: int = Field(ge=0)
+    scanned: int = Field(ge=0)
+    truncated: bool
+
+
+class KnowledgeContentResponse(StrictModel):
+    note_id: str
+    content: str
+    trust: Literal["untrusted"] = "untrusted"
+    size_bytes: int = Field(ge=0)
+
+
+class KnowledgeStatusResponse(StrictModel):
+    status: Literal["disabled", "ready", "degraded"]
+    enabled: bool
+    readable_folders: list[str] = Field(default_factory=list)
+    writable_folders: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class ReportInfo(StrictModel):
+    report_id: str
+    size_bytes: int = Field(ge=0)
+    created_at: datetime
+
+
+class ReportListResponse(StrictModel):
+    items: list[ReportInfo]
+    count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
+class ReportContentResponse(StrictModel):
+    report_id: str
+    content: str
+    size_bytes: int = Field(ge=0)
+
+
+class ReportExportRequest(StrictModel):
+    request: str | None = Field(default=None, min_length=1, max_length=6000)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+    approval_required: bool | None = None
+
+    @field_validator("risks")
+    @classmethod
+    def validate_risks(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 1000 for item in value):
+            raise ValueError("Los riesgos superan los límites permitidos")
+        return value
+
+
+class ReportCreatedResponse(StrictModel):
+    report_id: str
+    job_id: str
+    status: Literal["created"]
+    size_bytes: int = Field(ge=0)

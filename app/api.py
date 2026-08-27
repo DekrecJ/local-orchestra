@@ -34,8 +34,18 @@ from app.contracts import (
     MemoryCreatedResponse,
     MemorySearchRequest,
     MemorySearchResponse,
+    KnowledgeContentResponse,
+    KnowledgeNoteListResponse,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+    KnowledgeStatusResponse,
+    ReportContentResponse,
+    ReportCreatedResponse,
+    ReportExportRequest,
+    ReportListResponse,
 )
 from app.health import readiness
+from app.knowledge import KnowledgeAdapter, KnowledgeError, obsidian_adapter
 from app.observability import configure_logging, metrics
 from app.security import (
     api_error,
@@ -74,11 +84,15 @@ def structured_error(detail: Any) -> dict[str, Any]:
     }
 
 
-def create_app(client_factory: ClientFactory = default_client_factory) -> FastAPI:
+def create_app(
+    client_factory: ClientFactory = default_client_factory,
+    knowledge_adapter: KnowledgeAdapter = obsidian_adapter,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(instance: FastAPI) -> AsyncIterator[None]:
         configure_logging()
         instance.state.temporal = await client_factory()
+        instance.state.knowledge = knowledge_adapter
         yield
 
     application = FastAPI(
@@ -410,6 +424,149 @@ def create_app(client_factory: ClientFactory = default_client_factory) -> FastAP
         if not isinstance(result, dict):
             raise api_error(404, "result_not_found", "No existe resultado para el trabajo.", "not_found")
         return result
+
+    def knowledge_error(error: KnowledgeError):
+        category = {
+            404: "not_found",
+            409: "conflict",
+            413: "validation",
+            422: "validation",
+        }.get(error.status_code, "infrastructure")
+        return api_error(
+            error.status_code,
+            error.code,
+            str(error),
+            category,
+            retryable=error.status_code == 503,
+        )
+
+    @application.get(
+        "/v1/knowledge/status",
+        tags=["knowledge"],
+        response_model=KnowledgeStatusResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_status(request: Request, subject: str = Depends(require_authentication)):
+        return request.app.state.knowledge.health()
+
+    @application.get(
+        "/v1/knowledge/notes",
+        tags=["knowledge"],
+        response_model=KnowledgeNoteListResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_notes(
+        request: Request,
+        subject: str = Depends(require_authentication),
+        limit: int = Query(default=25, ge=1, le=settings.api_max_list_limit),
+    ):
+        try:
+            items = request.app.state.knowledge.list_notes(limit=limit)
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
+        return {"items": items, "count": len(items), "limit": limit}
+
+    @application.post(
+        "/v1/knowledge/search",
+        tags=["knowledge"],
+        response_model=KnowledgeSearchResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_search(
+        data: KnowledgeSearchRequest,
+        request: Request,
+        subject: str = Depends(require_authentication),
+    ):
+        try:
+            return request.app.state.knowledge.search(
+                data.query,
+                data.metadata,
+                tuple(data.folders),
+                data.limit,
+            )
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
+
+    @application.get(
+        "/v1/knowledge/notes/{note_id:path}",
+        tags=["knowledge"],
+        response_model=KnowledgeContentResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_note(
+        note_id: str,
+        request: Request,
+        subject: str = Depends(require_authentication),
+    ):
+        try:
+            return request.app.state.knowledge.read_note(note_id)
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
+
+    @application.get(
+        "/v1/knowledge/reports",
+        tags=["knowledge"],
+        response_model=ReportListResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_reports(
+        request: Request,
+        subject: str = Depends(require_authentication),
+        limit: int = Query(default=25, ge=1, le=settings.api_max_list_limit),
+    ):
+        try:
+            items = request.app.state.knowledge.list_reports(limit=limit)
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
+        return {"items": items, "count": len(items), "limit": limit}
+
+    @application.get(
+        "/v1/knowledge/reports/{report_id}",
+        tags=["knowledge"],
+        response_model=ReportContentResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def knowledge_report(
+        report_id: str,
+        request: Request,
+        subject: str = Depends(require_authentication),
+    ):
+        try:
+            return request.app.state.knowledge.read_report(report_id)
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
+
+    @application.post(
+        "/v1/jobs/{job_id}/reports",
+        status_code=201,
+        tags=["knowledge"],
+        response_model=ReportCreatedResponse,
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    async def export_job_report(
+        job_id: str,
+        data: ReportExportRequest,
+        request: Request,
+        subject: str = Depends(require_authentication),
+    ):
+        handle = await job_handle(request, job_id)
+        result = await completed_result(handle)
+        try:
+            try:
+                events = await handle.query(PythonCodeWorkflow.events)
+            except Exception:
+                events = await handle.query(LocalAIWorkflow.events)
+            content = request.app.state.knowledge.render_report(
+                job_id,
+                result,
+                request=data.request,
+                events=list(events),
+                risks=data.risks,
+                approval_required=data.approval_required,
+            )
+            return request.app.state.knowledge.write_report(job_id, content)
+        except KnowledgeError as error:
+            raise knowledge_error(error) from error
 
     @application.get("/v1/jobs/{job_id}/result", tags=["results"], response_model=JobResultResponse, dependencies=[Depends(enforce_rate_limit)])
     async def get_result(job_id: str, request: Request, subject: str = Depends(require_authentication)):

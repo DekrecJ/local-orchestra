@@ -10,6 +10,7 @@ from typing import Any
 import psycopg
 
 from app.providers import codex_provider, ollama_provider
+from app.knowledge import obsidian_adapter
 from app.sandbox_policy import audit_sandbox_script
 from app.settings import settings
 
@@ -135,6 +136,7 @@ async def readiness(client) -> dict[str, Any]:
             "runtime": sandbox_runtime["status"],
         },
         "authentication": check_authentication_configuration(),
+        "obsidian": obsidian_adapter.health(),
     }
     required = (
         "temporal", "postgresql", "ollama", "docker", "sandbox",

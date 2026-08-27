@@ -22,7 +22,15 @@ Límites de confianza:
   no root, límites de CPU/RAM/PIDs/tiempo/salida y rechazo de symlinks.
 - PostgreSQL almacena memoria/checkpoints. Temporal es la fuente de verdad de
   trabajos, eventos, cancelación y recuperación.
+- Obsidian es un adaptador opcional de conocimiento humano. Lee Markdown solo
+  desde `Knowledge`, `Projects` y `Skills`, y publica reportes exclusivamente
+  en `Runs`. Nunca actúa como cola, base transaccional ni estado canónico.
 
 Al reiniciar un worker, Temporal reproduce decisiones hasta el último comando
 registrado. Una actividad en curso debe mantener heartbeats; si desaparece,
 expira y queda como fallo visible, sin repetirse automáticamente.
+
+El adaptador Obsidian está fuera del workflow principal: una caída o permiso
+incorrecto se refleja como `degraded`, pero no detiene Temporal, API, Ollama ni
+el sandbox. La exportación de reportes requiere una petición API autenticada y
+explícita; no existe exportación automática.

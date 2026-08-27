@@ -40,3 +40,31 @@ restauración en otra instancia; el repositorio no automatiza restauración.
 
 `python -m app.retention` es dry-run. Tras revisar la lista, ejecutar manualmente
 `python -m app.retention --apply`. El timer incluido solo ejecuta dry-run.
+
+## Obsidian
+
+Está desactivado por defecto. Para activarlo, verificar primero que se trata de
+un vault dedicado —nunca uno personal— con las siete carpetas esperadas y añadir
+a `.env`:
+
+```text
+ORCHESTRA_OBSIDIAN_ENABLED=true
+ORCHESTRA_OBSIDIAN_VAULT_PATH=/home/derex/Capsulas/Obsidian/Orchestra-Vault
+```
+
+Reiniciar únicamente API/worker mediante los scripts y consultar
+`/health/ready` y `/v1/knowledge/status`. Para desactivarlo, restaurar
+`ORCHESTRA_OBSIDIAN_ENABLED=false` y reiniciar API/worker. Un estado Obsidian
+`degraded` no vuelve no-ready al backend principal.
+
+Diagnóstico: confirmar que la raíz y las siete carpetas son directorios reales,
+sin symlinks; las tres carpetas de lectura requieren lectura/traversal y `Runs`
+además escritura. Corregir permisos fuera del backend y reiniciar. El adaptador
+no repara, elimina ni mueve notas. Un temporal oculto tras un fallo de proceso
+puede revisarse manualmente; nunca se publica como reporte y no se sobrescribe.
+
+La incorporación futura de RAG debe indexar copias acotadas en PostgreSQL,
+mantener IDs lógicos y conservar Obsidian como fuente humana no canónica. Una
+CLI o integración MCP/REST posterior debe reutilizar el mismo adaptador,
+autenticación y límites, enlazarse solo a localhost y requerir autorización
+antes de instalar plugins o modificar `.obsidian`.
