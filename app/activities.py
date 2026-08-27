@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import threading
 from dataclasses import asdict
 from typing import Any
 
@@ -8,6 +10,27 @@ from app.code_revision import revise_python_workspace
 from app.code_workspace import create_python_workspace
 from app.graph import run_local_graph
 from app.sandbox_runner import run_python_tests
+
+
+HEARTBEAT_SECONDS = 5
+
+
+async def await_with_heartbeats(awaitable, message: str):
+    task = asyncio.create_task(awaitable)
+    try:
+        while not task.done():
+            done, _ = await asyncio.wait(
+                {task},
+                timeout=HEARTBEAT_SECONDS,
+            )
+            if not done:
+                activity.heartbeat(message)
+        return await task
+    except asyncio.CancelledError:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        raise
 
 
 @activity.defn
@@ -26,10 +49,13 @@ async def run_local_agent(
         memory_namespace,
     )
 
-    return await run_local_graph(
-        prompt=data["prompt"],
-        thread_id=thread_id,
-        memory_namespace=memory_namespace,
+    return await await_with_heartbeats(
+        run_local_graph(
+            prompt=data["prompt"],
+            thread_id=thread_id,
+            memory_namespace=memory_namespace,
+        ),
+        "local_agent_running",
     )
 
 
@@ -41,13 +67,14 @@ async def generate_python_workspace(
         "[PROGRAMADOR] Generando espacio de trabajo"
     )
 
-    result = await create_python_workspace(
-        task=data["task"],
+    result = await await_with_heartbeats(
+        create_python_workspace(task=data["task"]),
+        "workspace_generation_running",
     )
 
     activity.logger.info(
         "[PROGRAMADOR] Trabajo generado=%s",
-        result["job_id"],
+        result.get("job_id"),
     )
 
     return result
@@ -64,10 +91,31 @@ async def run_sandbox_tests(
         job_id,
     )
 
-    result = await asyncio.to_thread(
-        run_python_tests,
-        job_id,
+    cancellation_event = threading.Event()
+    sandbox_task = asyncio.create_task(
+        asyncio.to_thread(
+            run_python_tests,
+            job_id,
+            cancellation_event,
+        )
     )
+    try:
+        while not sandbox_task.done():
+            done, _ = await asyncio.wait(
+                {sandbox_task},
+                timeout=HEARTBEAT_SECONDS,
+            )
+            if not done:
+                activity.heartbeat("sandbox_running")
+        result = await sandbox_task
+    except asyncio.CancelledError:
+        cancellation_event.set()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                asyncio.shield(sandbox_task),
+                timeout=10,
+            )
+        raise
 
     activity.logger.info(
         "[SANDBOX] Trabajo=%s Resultado=%s Código=%s",
@@ -92,12 +140,15 @@ async def revise_python_code(
         attempt,
     )
 
-    result = await revise_python_workspace(
-        task=data["task"],
-        job_id=job_id,
-        source_files=data["source_files"],
-        test_output=data["test_output"],
-        attempt=attempt,
+    result = await await_with_heartbeats(
+        revise_python_workspace(
+            task=data["task"],
+            job_id=job_id,
+            source_files=data["source_files"],
+            test_output=data["test_output"],
+            attempt=attempt,
+        ),
+        f"source_correction_{attempt}",
     )
 
     activity.logger.info(

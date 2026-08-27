@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Local Orchestra workspace retention
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=local-orchestra-retention.service
+
+[Install]
+WantedBy=timers.target

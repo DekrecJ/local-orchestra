@@ -2,13 +2,13 @@ import logging
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import NotRequired
 
 from app.settings import settings
+from app.providers import ollama_provider
 from app.vector_memory import search_memories
 
 
@@ -38,11 +38,7 @@ class OrchestraState(MessagesState):
     verification_note: NotRequired[str]
 
 
-model = ChatOllama(
-    base_url=settings.ollama_base_url,
-    model=settings.ollama_model,
-    temperature=0,
-)
+model = ollama_provider.chat_model()
 
 router_model = model.with_structured_output(RouteDecision)
 verifier_model = model.with_structured_output(VerificationDecision)
@@ -100,7 +96,8 @@ async def supervisor_node(
     state: OrchestraState,
 ) -> dict[str, str]:
     try:
-        decision = await router_model.ainvoke(
+        decision = await ollama_provider.invoke(
+            router_model,
             [
                 SystemMessage(
                     content=(
@@ -111,7 +108,9 @@ async def supervisor_node(
                     )
                 ),
                 HumanMessage(content=state["task"]),
-            ]
+            ],
+            operation="route_task",
+            attempt=1,
         )
     except Exception:
         decision = fallback_route(state["task"])
@@ -168,7 +167,8 @@ async def run_specialist(
 ) -> dict[str, str]:
     logger.info("[%s] Procesando tarea", agent.upper())
 
-    response = await model.ainvoke(
+    response = await ollama_provider.invoke(
+        model,
         [
             SystemMessage(
                 content=specialist_system_prompt(
@@ -177,7 +177,9 @@ async def run_specialist(
                 )
             ),
             *state["messages"][-8:],
-        ]
+        ],
+        operation=f"specialist_{agent}",
+        attempt=1,
     )
 
     content = response.content
@@ -226,7 +228,8 @@ async def verifier_node(
     )
 
     try:
-        verification = await verifier_model.ainvoke(
+        verification = await ollama_provider.invoke(
+            verifier_model,
             [
                 SystemMessage(
                     content=(
@@ -236,7 +239,9 @@ async def verifier_node(
                     )
                 ),
                 HumanMessage(content=verification_prompt),
-            ]
+            ],
+            operation="verify_answer",
+            attempt=1,
         )
 
         final_answer = verification.final_answer

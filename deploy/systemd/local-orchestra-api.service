@@ -1,0 +1,26 @@
+[Unit]
+Description=Local Orchestra API (local staging)
+After=network.target
+
+[Service]
+Type=simple
+User=derex
+Group=derex
+WorkingDirectory=/srv/local-orchestra/apps/orchestrator
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/srv/local-orchestra/apps/orchestrator/.env
+ExecStart=/srv/local-orchestra/apps/orchestrator/.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# Readiness ejecuta el launcher exacto permitido por sudoers para sandbox-smoke.
+# El contenedor aplica no-new-privileges y capacidades nulas.
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/local-orchestra/apps/orchestrator
+ReadWritePaths=/srv/local-orchestra/workspaces
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

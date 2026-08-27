@@ -3,19 +3,24 @@ from __future__ import annotations
 import ast
 import asyncio
 import hashlib
+import logging
 import os
 import re
+import time
 from pathlib import Path
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from app.providers import ollama_provider
+from app.observability import metrics
 from app.settings import settings
 
 
-WORKSPACE_ROOT = Path("/srv/local-orchestra/workspaces")
+WORKSPACE_ROOT = settings.workspace_root
+logger = logging.getLogger("local_orchestra.generation")
+logger.addHandler(logging.NullHandler())
 FILE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}\.py$")
 
 MAX_TASK_CHARACTERS = 6000
@@ -43,10 +48,7 @@ class TestBundle(BaseModel):
         max_length=4,
     )
 
-base_model = ChatOllama(
-    base_url=settings.ollama_base_url,
-    model=settings.ollama_model,
-    temperature=0,
+base_model = ollama_provider.chat_model(
     reasoning=False,
     num_predict=4096,
 )
@@ -166,22 +168,49 @@ async def invoke_structured_with_retries(
     tests: bool,
     attempts: int = 3,
     retry_delay_seconds: float = 2,
+    provider=None,
 ):
     attempt_errors: list[dict[str, object]] = []
     retry_messages = list(messages)
 
     for attempt in range(1, attempts + 1):
+        started = time.monotonic()
         invocation_completed = False
         result = None
 
         try:
-            result = await model.ainvoke(retry_messages)
+            if provider is None:
+                result = await model.ainvoke(retry_messages)
+            else:
+                result = await provider.invoke(
+                    model,
+                    retry_messages,
+                    operation=label,
+                    attempt=attempt,
+                )
             invocation_completed = True
             validated = schema.model_validate(result)
 
             validate_files(
                 validated.files,
                 tests=tests,
+            )
+
+            metrics.increment(
+                "generation_attempts_total",
+                operation=label,
+                outcome="valid",
+            )
+            logger.info(
+                "generation_validation",
+                extra={
+                    "provider": getattr(provider, "name", "test"),
+                    "model": getattr(provider, "model_name", type(model).__name__),
+                    "operation": label,
+                    "attempt": attempt,
+                    "outcome": "valid",
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                },
             )
 
             return validated
@@ -214,6 +243,27 @@ async def invoke_structured_with_retries(
                     "error": str(error),
                     "output_fingerprint": fingerprint,
                 }
+            )
+            validation_outcome = (
+                "invalid_output"
+                if invocation_completed
+                else "invocation_error"
+            )
+            metrics.increment(
+                "generation_attempts_total",
+                operation=label,
+                outcome=validation_outcome,
+            )
+            logger.warning(
+                "generation_validation",
+                extra={
+                    "provider": getattr(provider, "name", "test"),
+                    "model": getattr(provider, "model_name", type(model).__name__),
+                    "operation": label,
+                    "attempt": attempt,
+                    "outcome": validation_outcome,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                },
             )
 
             if attempt >= attempts:
@@ -363,6 +413,7 @@ async def create_python_workspace(
             label="El programador",
             schema=SourceBundle,
             tests=False,
+            provider=ollama_provider,
         )
     except StructuredGenerationError as error:
         return generation_failure(
@@ -405,6 +456,7 @@ async def create_python_workspace(
             label="El diseñador de pruebas",
             schema=TestBundle,
             tests=True,
+            provider=ollama_provider,
         )
     except StructuredGenerationError as error:
         return generation_failure(

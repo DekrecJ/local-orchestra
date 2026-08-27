@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+readonly APP_DIR="/srv/local-orchestra/apps/orchestrator"
+readonly RUN_DIR="$APP_DIR/run"
+readonly LOG_DIR="$APP_DIR/logs"
+
+cd "$APP_DIR"
+mkdir -p -- "$RUN_DIR" "$LOG_DIR"
+for required in .venv/bin/python .secrets/postgres_password .secrets/api_token; do
+    if [[ ! -e "$required" ]]; then
+        echo "ERROR: falta $required" >&2
+        exit 66
+    fi
+done
+if [[ -s "$RUN_DIR/worker.pid" || -s "$RUN_DIR/api.pid" ]]; then
+    echo "ERROR: existen PID files; ejecute orchestra-stop o diagnostique primero." >&2
+    exit 73
+fi
+
+PYTHONDONTWRITEBYTECODE=1 nohup .venv/bin/python -m app.worker \
+    >>"$LOG_DIR/worker.log" 2>&1 &
+WORKER_PID=$!
+printf '%s\n' "$WORKER_PID" >"$RUN_DIR/worker.pid"
+
+PYTHONDONTWRITEBYTECODE=1 nohup .venv/bin/python -m uvicorn app.api:app \
+    --host 127.0.0.1 --port 8000 >>"$LOG_DIR/api.log" 2>&1 &
+API_PID=$!
+printf '%s\n' "$API_PID" >"$RUN_DIR/api.pid"
+
+echo "worker_pid=$WORKER_PID api_pid=$API_PID"
+echo "Temporal, PostgreSQL, Ollama y Docker permanecen bajo gestión manual."

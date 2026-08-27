@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly BASE_DIR="/srv/local-orchestra/workspaces"
+readonly IMAGE="python:3.13-slim"
+readonly TIME_LIMIT="30s"
+readonly MEMORY_LIMIT="512m"
+readonly CPU_LIMIT="1"
+readonly PIDS_LIMIT="64"
+
+if ! IFS= read -r JOB_ID; then
+    echo "ERROR: no se recibió el identificador del trabajo." >&2
+    exit 64
+fi
+if [[ ! "$JOB_ID" =~ ^(code-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|sandbox-smoke)$ ]]; then
+    echo "ERROR: identificador de trabajo inválido." >&2
+    exit 64
+fi
+
+BASE_REAL=$(/usr/bin/realpath -e -- "$BASE_DIR")
+if ! WORKSPACE=$(/usr/bin/realpath -e -- "$BASE_DIR/$JOB_ID"); then
+    echo "ERROR: el espacio de trabajo no existe." >&2
+    exit 66
+fi
+if [[ "$WORKSPACE" != "$BASE_REAL/$JOB_ID" || ! -d "$WORKSPACE" || -L "$BASE_DIR/$JOB_ID" ]]; then
+    echo "ERROR: espacio de trabajo no permitido." >&2
+    exit 66
+fi
+if /usr/bin/find -P "$WORKSPACE" -xdev -type l -print -quit | /usr/bin/grep -q .; then
+    echo "ERROR: el workspace contiene enlaces simbólicos." >&2
+    exit 77
+fi
+
+RUN_UID=$(/usr/bin/stat -c '%u' -- "$WORKSPACE")
+RUN_GID=$(/usr/bin/stat -c '%g' -- "$WORKSPACE")
+if [[ "$RUN_UID" == "0" ]]; then
+    echo "ERROR: el espacio de trabajo no puede pertenecer a root." >&2
+    exit 77
+fi
+
+RUNTIME_DIR=$(/usr/bin/mktemp -d /run/orchestra-sandbox.XXXXXX)
+CIDFILE="$RUNTIME_DIR/container.cid"
+cleanup() {
+    if [[ -s "$CIDFILE" ]]; then
+        CONTAINER_ID=$(/usr/bin/tr -d '\r\n' < "$CIDFILE")
+        if [[ "$CONTAINER_ID" =~ ^[a-f0-9]{12,64}$ ]]; then
+            /usr/bin/docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
+        fi
+    fi
+    /usr/bin/rm -f -- "$CIDFILE"
+    /usr/bin/rmdir -- "$RUNTIME_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+set +e
+/usr/bin/timeout --foreground --signal=TERM --kill-after=5s "$TIME_LIMIT" \
+    /usr/bin/docker run \
+        --rm \
+        --cidfile "$CIDFILE" \
+        --pull never \
+        --label orchestra.sandbox=true \
+        --network none \
+        --read-only \
+        --cap-drop ALL \
+        --security-opt no-new-privileges=true \
+        --pids-limit "$PIDS_LIMIT" \
+        --memory "$MEMORY_LIMIT" \
+        --memory-swap "$MEMORY_LIMIT" \
+        --cpus "$CPU_LIMIT" \
+        --ulimit nofile=256:256 \
+        --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m \
+        --user "$RUN_UID:$RUN_GID" \
+        --env HOME=/tmp \
+        --env PYTHONDONTWRITEBYTECODE=1 \
+        --mount "type=bind,src=$WORKSPACE,dst=/workspace,readonly" \
+        --workdir /workspace \
+        "$IMAGE" \
+        python -B -m unittest discover -s . -p 'test_*.py' -v
+RESULT=$?
+set -e
+exit "$RESULT"

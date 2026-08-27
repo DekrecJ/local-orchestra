@@ -22,6 +22,7 @@ from app.code_workspace import (
     validate_files,
 
 )
+from app.providers import ollama_provider
 
 
 JOB_ID_PATTERN = re.compile(
@@ -208,6 +209,7 @@ async def revise_python_workspace(
             label="El corrector",
             schema=SourceBundle,
             tests=False,
+            provider=ollama_provider,
         )
     except StructuredGenerationError as error:
         return {

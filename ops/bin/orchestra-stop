@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+readonly APP_DIR="/srv/local-orchestra/apps/orchestrator"
+readonly RUN_DIR="$APP_DIR/run"
+
+stop_one() {
+    local name="$1"
+    local expected="$2"
+    local pidfile="$RUN_DIR/$name.pid"
+    [[ -s "$pidfile" ]] || return 0
+    local pid
+    IFS= read -r pid <"$pidfile"
+    if [[ ! "$pid" =~ ^[0-9]+$ || ! -r "/proc/$pid/cmdline" ]]; then
+        echo "ADVERTENCIA: PID inválido o ausente para $name; no se envió señal." >&2
+        rm -f -- "$pidfile"
+        return 0
+    fi
+    local command
+    command=$(/usr/bin/tr '\0' ' ' <"/proc/$pid/cmdline")
+    if [[ "$command" != *"$expected"* ]]; then
+        echo "ERROR: PID $pid no corresponde a $name; no se envió señal." >&2
+        return 1
+    fi
+    kill -TERM "$pid"
+    rm -f -- "$pidfile"
+    echo "stopped=$name pid=$pid"
+}
+
+stop_one api "uvicorn app.api:app"
+stop_one worker "app.worker"

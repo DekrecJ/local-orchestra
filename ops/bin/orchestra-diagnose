@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+readonly APP_DIR="/srv/local-orchestra/apps/orchestrator"
+cd "$APP_DIR"
+exec .venv/bin/python -m app.diagnostics

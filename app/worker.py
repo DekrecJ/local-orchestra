@@ -9,6 +9,7 @@ from app.activities import (
     run_local_agent,
     run_sandbox_tests,
 )
+from app.observability import configure_logging
 from app.settings import settings
 from app.workflows import (
     LocalAIWorkflow,
@@ -18,6 +19,7 @@ from app.workflows import (
 
 
 async def main() -> None:
+    configure_logging()
     client = await Client.connect(
         settings.temporal_address,
         namespace=settings.temporal_namespace,
